@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "734703459987",
+    "project_id": "vaccinationsystem-d05f7",
+    "storage_bucket": "vaccinationsystem-d05f7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:734703459987:android:f81b7f0cfbad3461db7766",
+        "android_client_info": {
+          "package_name": "com.example.vaccination_system"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB9MvGcZmwsb9vIgFt_dDjLUlUVO9H1m5Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

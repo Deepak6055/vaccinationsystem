@@ -1,0 +1,36 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "vaccinationsystem-d05f7",
+          "appId": "1:734703459987:android:f81b7f0cfbad3461db7766",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "vaccinationsystem-d05f7",
+          "configurations": {
+            "android": "1:734703459987:android:f81b7f0cfbad3461db7766",
+            "web": "1:734703459987:web:5587c4466dd75f85db7766"
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "venv",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "runtime": "python313"
+    }
+  ]
+}
