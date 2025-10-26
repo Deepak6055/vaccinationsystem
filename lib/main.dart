@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:vaccination_system/pages/ChatPage.dart';
 import 'package:vaccination_system/pages/Doctor/DoctorSettingsPage.dart';
 import 'package:vaccination_system/pages/Nurse/NurseSettingsPage.dart';
+import 'package:vaccination_system/pages/Parent/ParentReportPage.dart';
 import 'package:vaccination_system/pages/Parent/ParentSettingsPage.dart';
 import 'package:vaccination_system/pages/chat_list_page.dart';
 import './pages/LoginPage.dart';

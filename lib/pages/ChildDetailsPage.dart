@@ -12,10 +12,20 @@ class ChildDetailsPage extends StatefulWidget {
 
 class _ChildDetailsPageState extends State<ChildDetailsPage> {
   final _nameController = TextEditingController();
-  final _ageController = TextEditingController();
   DateTime? _dob;
   String? _gender;
   final List<String> _allergies = [];
+
+  /// Calculates age from date of birth
+  int _calculateAge(DateTime dob) {
+    final today = DateTime.now();
+    int age = today.year - dob.year;
+    if (today.month < dob.month ||
+        (today.month == dob.month && today.day < dob.day)) {
+      age--;
+    }
+    return age;
+  }
 
   Future<void> _pickDob() async {
     final picked = await showDatePicker(
@@ -35,12 +45,14 @@ class _ChildDetailsPageState extends State<ChildDetailsPage> {
       return;
     }
 
+    final int calculatedAge = _calculateAge(_dob!);
+
     final childRef = FirebaseFirestore.instance.collection('children').doc();
     await childRef.set({
       'uuid': childRef.id,
       'name': _nameController.text,
       'dob': Timestamp.fromDate(_dob!),
-      'age': int.tryParse(_ageController.text) ?? 0,
+      'age': calculatedAge,
       'gender': _gender ?? '',
       'guardians': [widget.parentUuid],
       'appointments': [],
@@ -62,8 +74,8 @@ class _ChildDetailsPageState extends State<ChildDetailsPage> {
         const SnackBar(content: Text("Child added successfully!")),
       );
     }
-    Navigator.pushReplacementNamed(context, '/parent_home');
 
+    Navigator.pushReplacementNamed(context, '/parent_home');
   }
 
   void _showAllergyDialog() {
@@ -81,11 +93,9 @@ class _ChildDetailsPageState extends State<ChildDetailsPage> {
     showDialog(
       context: context,
       builder: (context) {
-        // Local copy so dialog changes don't immediately mutate parent until Done
         final tempSelected = <String>{};
         String existingOtherText = '';
 
-        // Seed tempSelected from current _allergies
         for (var a in _allergies) {
           if (a.startsWith('Other: ')) {
             tempSelected.add('Other');
@@ -93,8 +103,6 @@ class _ChildDetailsPageState extends State<ChildDetailsPage> {
           } else if (commonAllergies.contains(a)) {
             tempSelected.add(a);
           }
-          // if you previously allowed arbitrary custom allergies not in commonAllergies,
-          // you may want to include them here too.
         }
 
         final otherController = TextEditingController(text: existingOtherText);
@@ -126,7 +134,8 @@ class _ChildDetailsPageState extends State<ChildDetailsPage> {
                         ),
                         if (allergy == 'Other' && tempSelected.contains('Other'))
                           Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 12.0),
                             child: TextField(
                               controller: otherController,
                               decoration: const InputDecoration(
@@ -147,7 +156,6 @@ class _ChildDetailsPageState extends State<ChildDetailsPage> {
                 ),
                 TextButton(
                   onPressed: () {
-                    // Build the final list to commit to parent state
                     final newList = <String>[];
                     for (var sel in tempSelected) {
                       if (sel == 'Other') {
@@ -186,6 +194,9 @@ class _ChildDetailsPageState extends State<ChildDetailsPage> {
         ? DateFormat('yyyy-MM-dd').format(_dob!)
         : "Select Date of Birth";
 
+    final ageText =
+        _dob != null ? "Age: ${_calculateAge(_dob!)} years" : "Age not set";
+
     return Scaffold(
       appBar: AppBar(title: const Text("Child Details")),
       body: Padding(
@@ -198,16 +209,6 @@ class _ChildDetailsPageState extends State<ChildDetailsPage> {
                 decoration: const InputDecoration(
                   hintText: "Child's Name",
                   labelText: "Name",
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 15),
-              TextField(
-                controller: _ageController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  hintText: "Age",
-                  labelText: "Age",
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -242,6 +243,12 @@ class _ChildDetailsPageState extends State<ChildDetailsPage> {
                   child: Text(dobText),
                 ),
               ),
+              const SizedBox(height: 10),
+              if (_dob != null)
+                Text(
+                  ageText,
+                  style: const TextStyle(fontSize: 16, color: Colors.grey),
+                ),
               const SizedBox(height: 15),
               ElevatedButton(
                 onPressed: _showAllergyDialog,
@@ -254,7 +261,8 @@ class _ChildDetailsPageState extends State<ChildDetailsPage> {
                   children: _allergies
                       .map((allergy) => Chip(
                             label: Text(allergy),
-                            onDeleted: () => setState(() => _allergies.remove(allergy)),
+                            onDeleted: () =>
+                                setState(() => _allergies.remove(allergy)),
                           ))
                       .toList(),
                 ),
