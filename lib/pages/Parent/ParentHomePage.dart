@@ -29,7 +29,6 @@ class ParentHomePage extends StatelessWidget {
         throw 'Could not launch $url';
       }
     } catch (e) {
-      // Handle error - might want to show a snackbar or dialog
       print('Error launching maps: $e');
     }
   }
@@ -37,7 +36,7 @@ class ParentHomePage extends StatelessWidget {
   void _showServicesDialog(BuildContext context) {
     showModalBottomSheet(
       context: context,
-      isScrollControlled: true, // 👈 allows full height scroll
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -108,11 +107,12 @@ class ParentHomePage extends StatelessWidget {
     );
   }
 
+  // Updated: Passes a callback to trigger navigation safely after dialog closes
   void _showGenerateReportDialog(BuildContext context) {
     print('📋 Opening child selection dialog...');
     _fetchChildrenForReport().then((children) {
       print('👥 Found ${children.length} children');
-      
+
       if (children.isEmpty) {
         print('⚠️ No children found');
         ScaffoldMessenger.of(context).showSnackBar(
@@ -122,9 +122,10 @@ class ParentHomePage extends StatelessWidget {
       }
 
       print('✅ Showing child selection dialog');
-      showDialog(
+
+      showDialog<Map<String, dynamic>>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (dialogContext) => AlertDialog(
           title: const Text("Generate Report"),
           content: SizedBox(
             width: double.maxFinite,
@@ -140,15 +141,19 @@ class ParentHomePage extends StatelessWidget {
                   ),
                   onTap: () {
                     print('👤 Selected child: ${child['name']}');
-                    Navigator.pop(context);
-                    _generateReport(context, child);
+                    Navigator.of(dialogContext).pop(child); // Pop and return child data
                   },
                 );
               },
             ),
           ),
         ),
-      );
+      ).then((selectedChild) {
+        // This callback runs in the mounted parent context
+        if (selectedChild != null) {
+          _generateReport(context, selectedChild);
+        }
+      });
     });
   }
 
@@ -188,7 +193,7 @@ class ParentHomePage extends StatelessWidget {
     print('  - Completed vaccinations: ${completedAppointments.length}');
     print('  - Pending appointments: ${pendingAppointments.length}');
     print('  - Recommended vaccines: ${recommended.length}');
-    
+
     final pdf = pw.Document();
     print('✅ PDF document created');
 
@@ -198,7 +203,6 @@ class ParentHomePage extends StatelessWidget {
         margin: const pw.EdgeInsets.all(32),
         build: (pw.Context context) {
           return [
-            // Header
             pw.Header(
               level: 0,
               child: pw.Text(
@@ -210,8 +214,6 @@ class ParentHomePage extends StatelessWidget {
               ),
             ),
             pw.SizedBox(height: 20),
-
-            // Child Information Section
             pw.Header(
               level: 1,
               child: pw.Text(
@@ -245,8 +247,6 @@ class ParentHomePage extends StatelessWidget {
               ),
             ),
             pw.SizedBox(height: 20),
-
-            // Vaccinations Completed Section
             pw.Header(
               level: 1,
               child: pw.Text(
@@ -317,8 +317,6 @@ class ParentHomePage extends StatelessWidget {
                 }).toList(),
               ),
             pw.SizedBox(height: 20),
-
-            // Upcoming Appointments Section
             pw.Header(
               level: 1,
               child: pw.Text(
@@ -380,8 +378,6 @@ class ParentHomePage extends StatelessWidget {
                 }).toList(),
               ),
             pw.SizedBox(height: 20),
-
-            // Recommended Vaccinations Section
             pw.Header(
               level: 1,
               child: pw.Text(
@@ -419,8 +415,6 @@ class ParentHomePage extends StatelessWidget {
                 }).toList(),
               ),
             ),
-
-            // Footer
             pw.Spacer(),
             pw.Divider(),
             pw.Padding(
@@ -440,7 +434,6 @@ class ParentHomePage extends StatelessWidget {
     );
 
     print('✅ PDF content generated');
-    
     // Show PDF preview and allow printing/sharing
     print('📤 Opening PDF viewer...');
     await Printing.layoutPdf(
@@ -470,17 +463,19 @@ class ParentHomePage extends StatelessWidget {
     );
   }
 
-  // --- REPLACE _generateReport with stateful dialog version ---
+  // No change: context used is always safe here due to above fix
   Future<void> _generateReport(
     BuildContext context,
     Map<String, dynamic> child,
   ) async {
+    print('🟡 _generateReport called for child: ${child['name']}');
     // Step 1: Calculate age
     DateTime? dob;
     if (child['dob'] != null && child['dob'] is Timestamp) {
       dob = (child['dob'] as Timestamp).toDate();
     }
     int ageInMonths = dob != null ? VaccinationSchedule.calculateAgeInMonths(dob) : 0;
+    print('🟡 Calculated ageInMonths: $ageInMonths');
 
     // Step 2: Fetch appointments
     var appointmentsSnap = await FirebaseFirestore.instance
@@ -489,6 +484,7 @@ class ParentHomePage extends StatelessWidget {
         .get();
     List<Map<String, dynamic>> appointments =
         appointmentsSnap.docs.map((doc) => doc.data()).toList();
+    print('🟡 Appointments fetched: ${appointments.length}');
 
     // Step 3: Process appointments
     List<Map<String, dynamic>> completedAppointments = [];
@@ -509,28 +505,26 @@ class ParentHomePage extends StatelessWidget {
         pendingAppointments.add(appt);
       }
     }
+    print('🟡 Completed: ${completedAppointments.length}, Pending: ${pendingAppointments.length}');
 
     // Step 4: Recommended vaccines
     List<VaccineScheduleItem> recommended =
         VaccinationSchedule.getVaccinationsForAge(ageInMonths);
+    print('🟡 Recommended vaccines: ${recommended.length}');
 
-    // Step 5: Navigate to report page only if context is still mounted
-    if (context.mounted) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ParentReportPage(
-            child: child,
-            ageInMonths: ageInMonths,
-            recommended: recommended,
-            completedAppointments: completedAppointments,
-            pendingAppointments: pendingAppointments,
-          ),
+    // Step 5: Safe navigation using parent's context
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ParentReportPage(
+          child: child,
+          ageInMonths: ageInMonths,
+          recommended: recommended,
+          completedAppointments: completedAppointments,
+          pendingAppointments: pendingAppointments,
         ),
-      );
-    } else {
-      print('⚠️ Context not mounted, cannot navigate to report page');
-    }
+      ),
+    );
   }
 
   Future<List<Map<String, dynamic>>> _fetchChildrenWithAppointments() async {
@@ -552,7 +546,6 @@ class ParentHomePage extends StatelessWidget {
       if (!childDoc.exists) continue;
       var childData = childDoc.data() as Map<String, dynamic>;
 
-      // Fetch appointments for this child
       var appointmentsSnap = await FirebaseFirestore.instance
           .collection('appointments')
           .where('child_id', isEqualTo: childId)
@@ -595,7 +588,6 @@ class ParentHomePage extends StatelessWidget {
       ),
       body: Column(
         children: [
-          // Action Buttons Row
           Padding(
             padding: const EdgeInsets.all(12.0),
             child: Row(
@@ -771,4 +763,3 @@ class _ServiceButton extends StatelessWidget {
     );
   }
 }
-
