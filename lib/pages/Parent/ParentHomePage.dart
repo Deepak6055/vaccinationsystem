@@ -18,18 +18,68 @@ class ParentHomePage extends StatelessWidget {
 
   Future<void> _launchGoogleMaps(String query) async {
     final encodedQuery = Uri.encodeComponent(query);
-    final url = Uri.parse(
+    final geoUri = Uri.parse('geo:0,0?q=$encodedQuery');
+    final comGoogleUri = Uri.parse('comgooglemaps://?q=$encodedQuery');
+    final appleMapsUri = Uri.parse('http://maps.apple.com/?q=$encodedQuery');
+    final googleMapsWebUri = Uri.parse(
       'https://www.google.com/maps/search/?api=1&query=$encodedQuery',
     );
 
     try {
-      if (await canLaunchUrl(url)) {
-        await launchUrl(url, mode: LaunchMode.externalApplication);
-      } else {
-        throw 'Could not launch $url';
+      print('Attempting to open maps for query: $query');
+
+      // Try platform-specific native intents/schemes first
+      if (Platform.isAndroid) {
+        try {
+          if (await canLaunchUrl(geoUri)) {
+            final ok = await launchUrl(geoUri, mode: LaunchMode.externalApplication);
+            if (ok) return;
+          }
+        } catch (_) {}
+        try {
+          if (await canLaunchUrl(comGoogleUri)) {
+            final ok = await launchUrl(comGoogleUri, mode: LaunchMode.externalApplication);
+            if (ok) return;
+          }
+        } catch (_) {}
       }
+
+      if (Platform.isIOS) {
+        try {
+          if (await canLaunchUrl(appleMapsUri)) {
+            final ok = await launchUrl(appleMapsUri, mode: LaunchMode.externalApplication);
+            if (ok) return;
+          }
+        } catch (_) {}
+        try {
+          if (await canLaunchUrl(comGoogleUri)) {
+            final ok = await launchUrl(comGoogleUri, mode: LaunchMode.externalApplication);
+            if (ok) return;
+          }
+        } catch (_) {}
+      }
+
+      // Fallback: try opening the Google Maps web URL directly.
+      // Use launchUrl directly (don't rely only on canLaunchUrl for https).
+      try {
+        final launched = await launchUrl(googleMapsWebUri, mode: LaunchMode.externalApplication);
+        if (launched) return;
+      } catch (e) {
+        print('Direct web launch failed: $e');
+      }
+
+      // As a last attempt try opening in-app web view (if supported)
+      try {
+        final launchedInApp = await launchUrl(googleMapsWebUri, mode: LaunchMode.inAppWebView);
+        if (launchedInApp) return;
+      } catch (e) {
+        print('In-app web launch failed: $e');
+      }
+
+      // If we reach here nothing worked
+      print('Could not launch any map for query: $query');
     } catch (e) {
-      print('Error launching maps: $e');
+      print('Unexpected error launching maps: $e');
     }
   }
 

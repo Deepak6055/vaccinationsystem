@@ -43,6 +43,7 @@ dependencies:
   pdf: ^3.11.0
   printing: ^5.13.4
   path_provider: ^2.1.5
+  # maps_launcher: ^2.0.1
 
 dev_dependencies:
   flutter_test:
@@ -96,3 +97,7 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# Ensure no other package resolves a newer maps_launcher
+# dependency_overrides:
+#   maps_launcher: 2.0.1
