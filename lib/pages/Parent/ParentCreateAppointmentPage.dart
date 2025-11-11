@@ -1,31 +1,55 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz_data;
 import '../../utils/vaccination_schedule.dart';
 
 class ParentCreateAppointmentPage extends StatefulWidget {
   const ParentCreateAppointmentPage({super.key});
 
   @override
-  State<ParentCreateAppointmentPage> createState() => _ParentCreateAppointmentPageState();
+  State<ParentCreateAppointmentPage> createState() =>
+      _ParentCreateAppointmentPageState();
 }
 
-class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPage> {
+class _ParentCreateAppointmentPageState
+    extends State<ParentCreateAppointmentPage> {
   String? _selectedChild;
   String? _selectedDoctor;
   String? _selectedVaccineId;
   String? _selectedVaccineName;
   DateTime? _selectedDate;
   int? _childAgeMonths;
+  int _reminderDaysBefore = 1; // default reminder
   List<Map<String, dynamic>> _childData = [];
   List<Map<String, dynamic>> _doctorData = [];
   List<VaccineScheduleItem> _recommendedVaccines = [];
   bool _isLoading = false;
 
+  final FlutterLocalNotificationsPlugin _notificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
   @override
   void initState() {
     super.initState();
+    _initializeNotifications();
     _loadData();
+  }
+
+  Future<void> _initializeNotifications() async {
+    tz_data.initializeTimeZones();
+    const AndroidInitializationSettings androidInit =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initSettings =
+        InitializationSettings(android: androidInit);
+    await _notificationsPlugin.initialize(initSettings);
+
+    final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+        _notificationsPlugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    await androidImplementation?.requestNotificationsPermission();
   }
 
   Future<void> _loadData() async {
@@ -39,14 +63,18 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
 
   Future<void> _fetchChildren() async {
     final uid = FirebaseAuth.instance.currentUser!.uid;
-    final parentDoc = await FirebaseFirestore.instance.collection("parents").doc(uid).get();
+    final parentDoc =
+        await FirebaseFirestore.instance.collection("parents").doc(uid).get();
     if (!parentDoc.exists) return;
 
     List<dynamic> childIds = parentDoc.data()?['children'] ?? [];
     _childData = [];
 
     for (var childId in childIds) {
-      var childDoc = await FirebaseFirestore.instance.collection('children').doc(childId).get();
+      var childDoc = await FirebaseFirestore.instance
+          .collection('children')
+          .doc(childId)
+          .get();
       if (childDoc.exists) {
         var data = childDoc.data() as Map<String, dynamic>;
         _childData.add({
@@ -61,10 +89,9 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
 
   Future<void> _fetchDoctors() async {
     final snap = await FirebaseFirestore.instance.collection("doctors").get();
-    _doctorData = snap.docs.map((d) => {
-      "id": d.id,
-      "name": d.data()["name"] ?? "Unknown Doctor"
-    }).toList();
+    _doctorData = snap.docs
+        .map((d) => {"id": d.id, "name": d.data()["name"] ?? "Unknown Doctor"})
+        .toList();
     setState(() {});
   }
 
@@ -74,21 +101,24 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
       _selectedVaccineId = null;
       _selectedVaccineName = null;
       _recommendedVaccines = [];
-      
+
       if (childId != null) {
         var child = _childData.firstWhere((c) => c['id'] == childId);
         var dob = child['dob'] as DateTime?;
-        print("Child $childId DOB: $dob");
         if (dob != null) {
           _childAgeMonths = VaccinationSchedule.calculateAgeInMonths(dob);
-          _recommendedVaccines = VaccinationSchedule.getVaccinationsForAge(_childAgeMonths!);
+          _recommendedVaccines =
+              VaccinationSchedule.getVaccinationsForAge(_childAgeMonths!);
         }
       }
     });
   }
 
   Future<void> _saveAppointment() async {
-    if (_selectedChild == null || _selectedDoctor == null || _selectedVaccineId == null || _selectedDate == null) {
+    if (_selectedChild == null ||
+        _selectedDoctor == null ||
+        _selectedVaccineId == null ||
+        _selectedDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Please fill all fields")),
       );
@@ -103,19 +133,23 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
         "uuid": docRef.id,
         "child_id": _selectedChild,
         "doctor_id": _selectedDoctor,
-        "parent_id": uid, // Add parent_id
-        "vaccination_id": _selectedVaccineId, // Store as string (document ID)
-        "vaccination_name": _selectedVaccineName, // Store vaccine name
+        "parent_id": uid,
+        "vaccination_id": _selectedVaccineId,
+        "vaccination_name": _selectedVaccineName,
         "date": _selectedDate!.toIso8601String(),
-        "status": "pending_approval", // New status for parent-created appointments
+        "status": "pending_approval",
         "consent_form_signed": false,
         "created_at": DateTime.now().toIso8601String(),
         "updated_at": DateTime.now().toIso8601String(),
       });
 
+      await _scheduleAppointmentNotification();
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Appointment request submitted. Awaiting nurse approval.")),
+          const SnackBar(
+              content: Text(
+                  "Appointment request submitted and reminder scheduled.")),
         );
         Navigator.pop(context);
       }
@@ -126,6 +160,37 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
         );
       }
     }
+  }
+
+  Future<void> _scheduleAppointmentNotification() async {
+    if (_selectedDate == null || _selectedVaccineName == null) return;
+
+    final appointmentTime = _selectedDate!;
+    final reminderTime = appointmentTime.subtract(
+      Duration(days: _reminderDaysBefore),
+    );
+
+    if (reminderTime.isBefore(DateTime.now())) return;
+
+    await _notificationsPlugin.zonedSchedule(
+      appointmentTime.hashCode,
+      "Vaccination Appointment Reminder",
+      "Upcoming: $_selectedVaccineName on ${appointmentTime.toString().split(' ')[0]}",
+      tz.TZDateTime.from(reminderTime, tz.local),
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'appointment_channel',
+          'Appointment Reminders',
+          channelDescription: 'Reminds about upcoming vaccination appointments',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+      ),
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
+      matchDateTimeComponents: DateTimeComponents.dateAndTime,
+    );
   }
 
   @override
@@ -146,10 +211,9 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            "1. Select Child",
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                          ),
+                          const Text("1. Select Child",
+                              style: TextStyle(
+                                  fontSize: 18, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 8),
                           DropdownButtonFormField<String>(
                             value: _selectedChild,
@@ -179,8 +243,8 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                   ),
                   const SizedBox(height: 16),
 
-                  // Show Recommended Vaccines
-                  if (_selectedChild != null && _recommendedVaccines.isNotEmpty) ...[
+                  // Recommended Vaccines
+                  if (_selectedChild != null && _recommendedVaccines.isNotEmpty)
                     Card(
                       color: Colors.blue.shade50,
                       child: Padding(
@@ -190,7 +254,8 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.info_outline, color: Colors.blue.shade700),
+                                Icon(Icons.info_outline,
+                                    color: Colors.blue.shade700),
                                 const SizedBox(width: 8),
                                 Text(
                                   "Recommended Vaccinations (Age: $_childAgeMonths months)",
@@ -204,27 +269,32 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                             ),
                             const SizedBox(height: 8),
                             ..._recommendedVaccines.map((vaccine) => Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 4.0),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 4.0),
                                   child: Row(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      Icon(Icons.check_circle, size: 20, color: Colors.green.shade700),
+                                      Icon(Icons.check_circle,
+                                          size: 20,
+                                          color: Colors.green.shade700),
                                       const SizedBox(width: 8),
                                       Expanded(
                                         child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           children: [
-                                            Text(
-                                              vaccine.vaccine,
-                                              style: const TextStyle(fontWeight: FontWeight.bold),
-                                            ),
+                                            Text(vaccine.vaccine,
+                                                style: const TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.bold)),
                                             if (vaccine.remarks.isNotEmpty)
                                               Text(
                                                 vaccine.remarks,
                                                 style: TextStyle(
-                                                  fontSize: 12,
-                                                  color: Colors.grey.shade600,
-                                                ),
+                                                    fontSize: 12,
+                                                    color:
+                                                        Colors.grey.shade600),
                                               ),
                                           ],
                                         ),
@@ -236,48 +306,6 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                         ),
                       ),
                     ),
-                    const SizedBox(height: 16),
-                  ],
-
-                  // Vaccination Schedule Chart
-                  Card(
-                    child: ExpansionTile(
-                      leading: const Icon(Icons.calendar_today),
-                      title: const Text(
-                        "2. View Vaccination Schedule Chart",
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
-                      subtitle: const Text("Tap to view full Indian vaccination schedule"),
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(12.0),
-                          child: Table(
-                            border: TableBorder.all(color: Colors.grey.shade300),
-                            children: [
-                              TableRow(
-                                decoration: BoxDecoration(color: Colors.blue.shade100),
-                                children: const [
-                                  Padding(
-                                    padding: EdgeInsets.all(8.0),
-                                    child: Text("Age", style: TextStyle(fontWeight: FontWeight.bold)),
-                                  ),
-                                  Padding(
-                                    padding: EdgeInsets.all(8.0),
-                                    child: Text("Vaccines", style: TextStyle(fontWeight: FontWeight.bold)),
-                                  ),
-                                  Padding(
-                                    padding: EdgeInsets.all(8.0),
-                                    child: Text("Remarks", style: TextStyle(fontWeight: FontWeight.bold)),
-                                  ),
-                                ],
-                              ),
-                              ..._buildScheduleTableRows(),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                   const SizedBox(height: 16),
 
                   // Vaccine Selection
@@ -287,10 +315,9 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            "3. Select Vaccine",
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                          ),
+                          const Text("2. Select Vaccine",
+                              style: TextStyle(
+                                  fontSize: 18, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 8),
                           TextField(
                             decoration: InputDecoration(
@@ -301,17 +328,18 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                               suffixIcon: _selectedVaccineId != null
                                   ? IconButton(
                                       icon: const Icon(Icons.clear),
-                              onPressed: () {
-                                setState(() {
-                                  _selectedVaccineId = null;
-                                  _selectedVaccineName = null;
-                                });
-                              },
+                                      onPressed: () {
+                                        setState(() {
+                                          _selectedVaccineId = null;
+                                          _selectedVaccineName = null;
+                                        });
+                                      },
                                     )
                                   : null,
                             ),
                             onTap: () => _showVaccineSelectionDialog(),
-                            controller: TextEditingController(text: _selectedVaccineName),
+                            controller: TextEditingController(
+                                text: _selectedVaccineName),
                             readOnly: true,
                           ),
                         ],
@@ -327,32 +355,24 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            "4. Select Doctor",
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                          ),
+                          const Text("3. Select Doctor",
+                              style: TextStyle(
+                                  fontSize: 18, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 8),
-                          FutureBuilder(
-                            future: Future.delayed(Duration.zero, () => _doctorData),
-                            builder: (context, snapshot) {
-                              if (_doctorData.isEmpty) {
-                                return const Text("No doctors available");
-                              }
-                              return DropdownButtonFormField<String>(
-                                value: _selectedDoctor,
-                                items: _doctorData
-                                    .map((d) => DropdownMenuItem<String>(
-                                          value: d["id"] as String?,
-                                          child: Text(d["name"]),
-                                        ))
-                                    .toList(),
-                                onChanged: (String? val) => setState(() => _selectedDoctor = val),
-                                decoration: const InputDecoration(
-                                  labelText: "Select Doctor",
-                                  border: OutlineInputBorder(),
-                                ),
-                              );
-                            },
+                          DropdownButtonFormField<String>(
+                            value: _selectedDoctor,
+                            items: _doctorData
+                                .map((d) => DropdownMenuItem<String>(
+                                      value: d["id"] as String?,
+                                      child: Text(d["name"]),
+                                    ))
+                                .toList(),
+                            onChanged: (String? val) =>
+                                setState(() => _selectedDoctor = val),
+                            decoration: const InputDecoration(
+                              labelText: "Select Doctor",
+                              border: OutlineInputBorder(),
+                            ),
                           ),
                         ],
                       ),
@@ -367,16 +387,16 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            "5. Select Date",
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                          ),
+                          const Text("4. Select Date",
+                              style: TextStyle(
+                                  fontSize: 18, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 8),
                           ElevatedButton(
                             onPressed: () async {
                               DateTime? picked = await showDatePicker(
                                 context: context,
-                                initialDate: DateTime.now().add(const Duration(days: 1)),
+                                initialDate:
+                                    DateTime.now().add(const Duration(days: 1)),
                                 firstDate: DateTime.now(),
                                 lastDate: DateTime(2100),
                               );
@@ -395,6 +415,40 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                       ),
                     ),
                   ),
+                  const SizedBox(height: 16),
+
+                  // Reminder Preference
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text("5. Reminder Preference",
+                              style: TextStyle(
+                                  fontSize: 18, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+                          DropdownButtonFormField<int>(
+                            value: _reminderDaysBefore,
+                            items: const [
+                              DropdownMenuItem(
+                                  value: 0, child: Text("At Appointment Time")),
+                              DropdownMenuItem(
+                                  value: 1, child: Text("1 Day Before")),
+                              DropdownMenuItem(
+                                  value: 2, child: Text("2 Days Before")),
+                            ],
+                            onChanged: (val) =>
+                                setState(() => _reminderDaysBefore = val ?? 1),
+                            decoration: const InputDecoration(
+                              labelText: "Select Reminder",
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 24),
 
                   // Submit Button
@@ -404,10 +458,8 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                       minimumSize: const Size(double.infinity, 50),
                       backgroundColor: Colors.green,
                     ),
-                    child: const Text(
-                      "Submit Appointment Request",
-                      style: TextStyle(fontSize: 16),
-                    ),
+                    child: const Text("Submit Appointment Request",
+                        style: TextStyle(fontSize: 16)),
                   ),
                 ],
               ),
@@ -416,16 +468,16 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
   }
 
   void _showVaccineSelectionDialog() async {
-    // Fetch actual vaccination documents from Firestore
-    final snap = await FirebaseFirestore.instance.collection("vaccinations").get();
-    final vaccineDocs = snap.docs.map((doc) => {
-      "id": doc.id,
-      "name": doc.data()["name"] ?? "Unknown",
-      "data": doc.data(),
-    }).toList();
-    
-    // Use vaccineDocs from Firestore
-    
+    final snap =
+        await FirebaseFirestore.instance.collection("vaccinations").get();
+    final vaccineDocs = snap.docs
+        .map((doc) => {
+              "id": doc.id,
+              "name": doc.data()["name"] ?? "Unknown",
+              "data": doc.data(),
+            })
+        .toList();
+
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -435,10 +487,8 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                "Select Vaccine",
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
+              const Text("Select Vaccine",
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               const SizedBox(height: 16),
               Expanded(
                 child: ListView.builder(
@@ -459,48 +509,12 @@ class _ParentCreateAppointmentPageState extends State<ParentCreateAppointmentPag
                 ),
               ),
               TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text("Cancel"),
-              ),
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Cancel")),
             ],
           ),
         ),
       ),
     );
   }
-
-  List<TableRow> _buildScheduleTableRows() {
-    final scheduleData = [
-      ["At Birth", "BCG, Hepatitis B (Birth dose), OPV-0", "As soon as possible after birth"],
-      ["6 Weeks", "DTP (1st), IPV (1st), Hep B (2nd), Hib (1st), Rotavirus (1st), PCV (1st)", "Start of primary series"],
-      ["10 Weeks", "DTP (2nd), IPV (2nd), Hib (2nd), Rotavirus (2nd), PCV (2nd)", "Continue primary vaccination"],
-      ["14 Weeks", "DTP (3rd), IPV (3rd), Hib (3rd), Rotavirus (3rd), PCV (3rd)", "Complete primary series"],
-      ["9-12 Months", "MMR (1st), PCV Booster, Hepatitis A (1st)", "Prevents measles, mumps, rubella, pneumonia"],
-      ["15-18 Months", "DTP Booster-1, IPV Booster, Hib Booster, MMR (2nd), Varicella (1st)", "First booster phase"],
-      ["2 Years", "Typhoid Conjugate Vaccine", "Prevents typhoid fever"],
-      ["4-6 Years", "DTP Booster-2, IPV Booster, MMR (3rd), Varicella (2nd)", "School entry booster"],
-      ["10-12 Years", "Tdap/Td Booster, HPV (for girls)", "Adolescent protection"],
-      ["16-18 Years", "Td Booster", "Reinforcement for lifelong protection"],
-    ];
-
-    return scheduleData.map((row) {
-      return TableRow(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Text(row[0], style: const TextStyle(fontWeight: FontWeight.w600)),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Text(row[1]),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Text(row[2], style: TextStyle(color: Colors.grey.shade600, fontSize: 11)),
-          ),
-        ],
-      );
-    }).toList();
-  }
 }
-
